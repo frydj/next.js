@@ -92,9 +92,10 @@ import { checkIsRoutePPREnabled } from '../server/lib/experimental/ppr'
 import type { Params } from '../client/components/params'
 import { FallbackMode } from '../lib/fallback'
 import {
-  fallbackToStaticPathsResult,
-  parseFallbackStaticPathsResult,
+  fallbackModeToStaticPathsResult,
+  parseStaticPathsResult,
 } from '../lib/fallback'
+import { getParamKeys } from '../client/components/fallback-params'
 
 export type ROUTER_TYPE = 'pages' | 'app'
 
@@ -972,6 +973,7 @@ export async function buildStaticPaths({
   defaultLocale,
   appDir,
   isRoutePPREnabled,
+  isAppPPRFallbacksEnabled,
 }: {
   page: string
   getStaticPaths?: GetStaticPaths
@@ -981,8 +983,9 @@ export async function buildStaticPaths({
   defaultLocale?: string
   appDir?: boolean
   isRoutePPREnabled: boolean | undefined
+  isAppPPRFallbacksEnabled: boolean | undefined
 }): Promise<StaticPathsResult> {
-  const prerenderRoutes: PrerenderedRoute[] = []
+  const prerenderedRoutes: PrerenderedRoute[] = []
   const _routeRegex = getRouteRegex(page)
   const _routeMatcher = getRouteMatcher(_routeRegex)
 
@@ -991,8 +994,8 @@ export async function buildStaticPaths({
 
   // When PPR is enabled for the route, we want to generate a fallback page
   // using the dynamic path.
-  if (isRoutePPREnabled) {
-    prerenderRoutes.push({
+  if (isRoutePPREnabled && isAppPPRFallbacksEnabled) {
+    prerenderedRoutes.push({
       path: page,
       encoded: page,
       fallbackRouteParams: routeParameterKeys,
@@ -1081,7 +1084,7 @@ export async function buildStaticPaths({
       // If leveraging the string paths variant the entry should already be
       // encoded so we decode the segments ensuring we only escape path
       // delimiters
-      prerenderRoutes.push({
+      prerenderedRoutes.push({
         path: entry
           .split('/')
           .map((segment) =>
@@ -1184,7 +1187,7 @@ export async function buildStaticPaths({
       }
       const curLocale = entry.locale || defaultLocale || ''
 
-      prerenderRoutes.push({
+      prerenderedRoutes.push({
         path: `${curLocale ? `/${curLocale}` : ''}${
           curLocale && builtPage === '/' ? '' : builtPage
         }`,
@@ -1199,8 +1202,8 @@ export async function buildStaticPaths({
   const seen = new Set<string>()
 
   return {
-    fallbackMode: parseFallbackStaticPathsResult(staticPathsResult.fallback),
-    prerenderedRoutes: prerenderRoutes.filter((route) => {
+    fallbackMode: parseStaticPathsResult(staticPathsResult.fallback),
+    prerenderedRoutes: prerenderedRoutes.filter((route) => {
       if (seen.has(route.path)) return false
 
       // Filter out duplicate paths.
@@ -1449,6 +1452,7 @@ export async function buildAppStaticPaths({
           configFileName,
           getStaticPaths: pageEntry.getStaticPaths,
           isRoutePPREnabled,
+          isAppPPRFallbacksEnabled,
         })
       } else {
         // if generateStaticParams is being used we iterate over them
@@ -1536,29 +1540,43 @@ export async function buildAppStaticPaths({
           (generate) => generate.config?.dynamicParams === false
         )
           ? isRoutePPREnabled && isAppPPRFallbacksEnabled
-            ? FallbackMode.STATIC_PRERENDER
+            ? FallbackMode.PRERENDER
             : FallbackMode.BLOCKING_STATIC_RENDER
           : FallbackMode.NOT_FOUND
 
-        if (!hadAllParamsGenerated && !isRoutePPREnabled) {
+        if (!hadAllParamsGenerated) {
+          let prerenderedRoutes: PrerenderedRoute[] | undefined
+          if (isRoutePPREnabled && isAppPPRFallbacksEnabled) {
+            prerenderedRoutes = [
+              {
+                path: page,
+                encoded: page,
+                fallbackRouteParams: getParamKeys(page),
+              },
+            ]
+          }
+
           return {
             fallbackMode:
               process.env.NODE_ENV === 'production' && isDynamicRoute(page)
-                ? FallbackMode.BLOCKING_STATIC_RENDER
+                ? isRoutePPREnabled && isAppPPRFallbacksEnabled
+                  ? FallbackMode.PRERENDER
+                  : FallbackMode.BLOCKING_STATIC_RENDER
                 : undefined,
-            prerenderedRoutes: undefined,
+            prerenderedRoutes,
           }
         }
 
         return buildStaticPaths({
           staticPathsResult: {
-            fallback: fallbackToStaticPathsResult(fallbackMode),
+            fallback: fallbackModeToStaticPathsResult(fallbackMode),
             paths: builtParams.map((params) => ({ params })),
           },
           page,
           configFileName,
           appDir: true,
           isRoutePPREnabled,
+          isAppPPRFallbacksEnabled,
         })
       }
     }
@@ -1798,6 +1816,7 @@ export async function isPageStatic({
             staticPathsResult,
             getStaticPaths: componentsResult.getStaticPaths!,
             isRoutePPREnabled,
+            isAppPPRFallbacksEnabled,
           }))
       }
 

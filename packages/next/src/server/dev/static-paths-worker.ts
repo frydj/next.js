@@ -138,5 +138,6 @@ export async function loadStaticPaths({
     defaultLocale,
     // Pages does not support PPR.
     isRoutePPREnabled: false,
+    isAppPPRFallbacksEnabled: false,
   })
 }
